@@ -1,7 +1,7 @@
 from typing import List
 import gradio as gr
 from pathlib import Path
-from sonic_api_wrapper import CartesiaVoiceManager, VoiceAccessibility, improve_tts_text
+from sonic_wrapper.sonic_api_wrapper import CartesiaVoiceManager, VoiceAccessibility, improve_tts_text
 import os
 import json
 import datetime

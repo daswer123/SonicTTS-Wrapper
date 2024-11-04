@@ -1,4 +1,5 @@
 cartesia
 tqdm
 loguru
-gradio
+gradio>=5.0.0
+python-dotenv
