@@ -333,16 +333,3 @@ python -m sonic_wrapper.cli generate-speech \
 ## License
 
 This project is licensed under the MIT License.
-
-## Acknowledgments
-
-- **Cartesia**: For providing the [Sonic TTS API](https://www.cartesia.ai/sonic).
-- **Gradio**: For the web interface framework.
-
-## Contact
-
-For any questions or suggestions, please open an issue on the [GitHub repository](https://github.com/daswer123/sonic_tts_api_wrapper) or contact the author:
-
-- **Author**: daswer123
-- **Email**: daswerq123@gmail.com
-
