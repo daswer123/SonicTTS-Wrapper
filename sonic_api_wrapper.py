@@ -3,11 +3,15 @@ import json
 from pathlib import Path
 from typing import List, Dict, Union, Optional
 from enum import Enum
-from cartesia import Cartesia
 from tqdm import tqdm
 from loguru import logger
 from datetime import datetime
 import re
+
+try:
+    from cartesia import Cartesia
+except ImportError:
+    Cartesia = None  # Handle the case where Cartesia is not installed
 
 class VoiceAccessibility(Enum):
     ALL = "all"
@@ -28,49 +32,72 @@ class CartesiaVoiceManager:
 
     def __init__(self, api_key: str = None, base_dir: Path = None):
         self.api_key = api_key or os.environ.get("CARTESIA_API_KEY")
-        if not self.api_key:
-            raise ValueError("API key is required. Please provide it as an argument or set CARTESIA_API_KEY environment variable.")
-        
-        self.client = Cartesia(api_key=self.api_key)
+        if self.api_key and Cartesia:
+            self.client = Cartesia(api_key=self.api_key)
+            logger.info("Cartesia client initialized with API key.")
+        else:
+            self.client = None
+            logger.warning("API key not provided. Cartesia client is not initialized. Some features will be unavailable.")
+
         self.current_voice = None
         self.current_model = None
         self.current_language = None
         self.current_mix = None
-        
-        # Настройка директорий
+
+        # Setting up directories
         self.base_dir = base_dir or Path("voice2voice")
         self.api_dir = self.base_dir / "api"
         self.custom_dir = self.base_dir / "custom"
-        
-        # Создание необходимых директорий
+
+        # Create necessary directories
         self.api_dir.mkdir(parents=True, exist_ok=True)
         self.custom_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Инициализация голосов
+
+        # Initialize voices
         self.voices = {}
         self.loaded_voices = set()
-        
-        # Настройки скорости и эмоций
+
+        # Speed and emotion settings
         self._speed = 0.0  # normal speed
         self._emotions = {}
-        
+
         logger.add("cartesia_voice_manager.log", rotation="10 MB")
         logger.info("CartesiaVoiceManager initialized")
 
+    
+    def set_api_key(self, api_key: str):
+        """
+        Устанавливает API ключ и инициализирует клиент Cartesia.
+        Затем обновляет список голосов из API.
+        """
+        self.api_key = api_key
+        if Cartesia:
+            try:
+                self.client = Cartesia(api_key=self.api_key)
+                logger.info("Cartesia client initialized with new API key.")
+                self.update_voices_from_api()
+            except Exception as e:
+                logger.error(f"Failed to initialize Cartesia client with the provided API key: {e}")
+                self.client = None
+                raise ValueError("Failed to initialize Cartesia client with the provided API key.")
+        else:
+            logger.error("Cartesia library is not available. Cannot initialize Cartesia client.")
+            raise ImportError("Cartesia library is not installed.")
+    
     def load_voice(self, voice_id: str) -> Dict:
         if voice_id in self.loaded_voices:
             return self.voices[voice_id]
-            
+
         voice_file = None
-        # Поиск файла голоса в api и custom директориях
+        # Search for voice file in api and custom directories
         api_file = self.api_dir / f"{voice_id}.json"
         custom_file = self.custom_dir / f"{voice_id}.json"
-        
+
         if api_file.exists():
             voice_file = api_file
         elif custom_file.exists():
             voice_file = custom_file
-            
+
         if voice_file:
             with open(voice_file, "r") as f:
                 voice_data = json.load(f)
@@ -79,32 +106,36 @@ class CartesiaVoiceManager:
                 logger.info(f"Loaded voice {voice_id} from {voice_file}")
                 return voice_data
         else:
-            # Если голос не найден локально, пытаемся загрузить из API
-            try:
-                voice_data = self.client.voices.get(id=voice_id)
-                self._save_voice_to_api(voice_data)
-                self.voices[voice_id] = voice_data
-                self.loaded_voices.add(voice_id)
-                logger.info(f"Loaded voice {voice_id} from API")
-                return voice_data
-            except Exception as e:
-                logger.error(f"Failed to load voice {voice_id}: {e}")
-                raise ValueError(f"Voice with id {voice_id} not found")
+            # If voice not found locally, try to load from API
+            if self.client:
+                try:
+                    voice_data = self.client.voices.get(id=voice_id)
+                    self._save_voice_to_api(voice_data)
+                    self.voices[voice_id] = voice_data
+                    self.loaded_voices.add(voice_id)
+                    logger.info(f"Loaded voice {voice_id} from API")
+                    return voice_data
+                except Exception as e:
+                    logger.error(f"Failed to load voice {voice_id}: {e}")
+                    raise ValueError(f"Voice with id {voice_id} not found")
+            else:
+                logger.error(f"Cannot load voice {voice_id} without API client.")
+                raise ValueError(f"Voice with id {voice_id} not found and API client is not available.")
 
     def extract_voice_id_from_label(self, voice_label: str) -> Optional[str]:
         """
-        Извлекает ID голоса из метки в dropdown
-        Например: "John (en) [Custom]" -> извлечет ID из словаря голосов
+        Extracts voice ID from label in dropdown
+        For example: "John (en) [Custom]" -> extract ID from voices dictionary
         """
-        # Получаем все голоса и их метки
+        # Get all voices and their labels
         choices = self.get_voice_choices()
-        # Находим голос по метке и берем его ID
+        # Find voice by label and get its ID
         voice_data = next((c for c in choices if c["label"] == voice_label), None)
         return voice_data["value"] if voice_data else None
-    
+
     def get_voice_choices(self, language: str = None, accessibility: VoiceAccessibility = VoiceAccessibility.ALL) -> List[Dict]:
         """
-        Возвращает список голосов для dropdown меню
+        Returns a list of voices for dropdown menu
         """
         voices = self.list_available_voices(
             languages=[language] if language else None,
@@ -113,17 +144,17 @@ class CartesiaVoiceManager:
 
         choices = []
         for voice in voices:
-            # Сохраняем только ID в value
+            # Keep only ID in value
             choices.append({
                 "label": f"{voice['name']} ({voice['language']}){' [Custom]' if voice.get('is_custom') else ''}",
-                "value": voice['id']  # Здесь только ID
+                "value": voice['id']  # Only ID here
             })
 
         return sorted(choices, key=lambda x: x['label'])
 
     def get_voice_info(self, voice_id: str) -> Dict:
         """
-        Возвращает информацию о голосе для отображения
+        Returns voice information for display
         """
         voice = self.load_voice(voice_id)
         return {
@@ -133,7 +164,7 @@ class CartesiaVoiceManager:
             "is_public": voice.get('is_public', True),
             "id": voice['id']
         }
-    
+
     def _save_voice_to_api(self, voice_data: Dict):
         voice_id = voice_data["id"]
         file_path = self.api_dir / f"{voice_id}.json"
@@ -149,37 +180,47 @@ class CartesiaVoiceManager:
         logger.info(f"Saved custom voice {voice_id} to {file_path}")
 
     def update_voices_from_api(self):
+        if not self.client:
+            logger.warning("Cannot update voices from API without API client.")
+            return
+
         logger.info("Updating voices from API")
-        api_voices = self.client.voices.list()
-        for voice in tqdm(api_voices, desc="Updating voices"):
-            voice_id = voice["id"]
-            full_voice_data = self.client.voices.get(id=voice_id)
-            self._save_voice_to_api(full_voice_data)
-            if voice_id in self.loaded_voices:
-                self.voices[voice_id] = full_voice_data
-        logger.info(f"Updated {len(api_voices)} voices from API")
+        try:
+            api_voices = self.client.voices.list()
+            for voice in tqdm(api_voices, desc="Updating voices"):
+                voice_id = voice["id"]
+                full_voice_data = self.client.voices.get(id=voice_id)
+                self._save_voice_to_api(full_voice_data)
+                if voice_id in self.loaded_voices:
+                    self.voices[voice_id] = full_voice_data
+            logger.info(f"Updated {len(api_voices)} voices from API")
+        except Exception as e:
+            logger.error(f"Failed to update voices from API: {e}")
 
     def list_available_voices(self, languages: List[str] = None, accessibility: VoiceAccessibility = VoiceAccessibility.ALL) -> List[Dict]:
         filtered_voices = []
 
-        # Получаем только метаданные из API (без эмбеддингов)
+        # Get only metadata from API (without embeddings)
         if accessibility in [VoiceAccessibility.ALL, VoiceAccessibility.ONLY_PUBLIC]:
-            try:
-                api_voices = self.client.voices.list()
-                # Сохраняем только метаданные
-                for voice in api_voices:
-                    metadata = {
-                        'id': voice['id'],
-                        'name': voice['name'],
-                        'language': voice['language'],
-                        'is_public': True
-                    }
-                    if languages is None or metadata['language'] in languages:
-                        filtered_voices.append(metadata)
-            except Exception as e:
-                logger.error(f"Failed to fetch voices from API: {e}")
+            if self.client:
+                try:
+                    api_voices = self.client.voices.list()
+                    # Keep only metadata
+                    for voice in api_voices:
+                        metadata = {
+                            'id': voice['id'],
+                            'name': voice['name'],
+                            'language': voice['language'],
+                            'is_public': True
+                        }
+                        if languages is None or metadata['language'] in languages:
+                            filtered_voices.append(metadata)
+                except Exception as e:
+                    logger.error(f"Failed to fetch voices from API: {e}")
+            else:
+                logger.warning("API client is not available. Skipping public voices.")
 
-        # Добавляем кастомные голоса если нужно
+        # Add custom voices if needed
         if accessibility in [VoiceAccessibility.ALL, VoiceAccessibility.ONLY_PRIVATE, VoiceAccessibility.ONLY_CUSTOM]:
             for file in self.custom_dir.glob("*.json"):
                 with open(file, "r") as f:
@@ -197,7 +238,7 @@ class CartesiaVoiceManager:
         return filtered_voices
 
     def set_voice(self, voice_id: str):
-        # Проверяем наличие локального файла с эмбеддингом
+        # Check for local file with embedding
         voice_file = None
         api_file = self.api_dir / f"{voice_id}.json"
         custom_file = self.custom_dir / f"{voice_id}.json"
@@ -208,19 +249,23 @@ class CartesiaVoiceManager:
             voice_file = custom_file
 
         if voice_file:
-            # Используем локальные данные
+            # Use local data
             with open(voice_file, "r") as f:
                 self.current_voice = json.load(f)
         else:
-            # Получаем полные данные с эмбеддингом из API
-            try:
-                voice_data = self.client.voices.get(id=voice_id)
-                # Сохраняем для будущего использования
-                self._save_voice_to_api(voice_data)
-                self.current_voice = voice_data
-            except Exception as e:
-                logger.error(f"Failed to get voice {voice_id}: {e}")
-                raise ValueError(f"Voice with id {voice_id} not found")
+            # Get full data with embedding from API
+            if self.client:
+                try:
+                    voice_data = self.client.voices.get(id=voice_id)
+                    # Save for future use
+                    self._save_voice_to_api(voice_data)
+                    self.current_voice = voice_data
+                except Exception as e:
+                    logger.error(f"Failed to get voice {voice_id}: {e}")
+                    raise ValueError(f"Voice with id {voice_id} not found")
+            else:
+                logger.error(f"Cannot set voice {voice_id} without API client.")
+                raise ValueError(f"Voice with id {voice_id} not found and API client is not available.")
 
         self.set_language(self.current_voice['language'])
         logger.info(f"Set current voice to {voice_id}")
@@ -261,32 +306,35 @@ class CartesiaVoiceManager:
             self._emotions = {}
             logger.info("Cleared all emotions")
             return
-            
+
         self._emotions = {}
         for emotion in emotions:
             name = emotion.get("name")
             level = emotion.get("level")
-            
+
             if name not in self.EMOTION_NAMES:
                 raise ValueError(f"Invalid emotion name. Choose from: {self.EMOTION_NAMES}")
             if level not in self.EMOTION_LEVELS:
                 raise ValueError(f"Invalid emotion level. Choose from: {self.EMOTION_LEVELS}")
-                
+
             self._emotions[name] = level
-        
+
         logger.info(f"Set emotions: {self._emotions}")
 
     def _get_voice_controls(self):
         controls = {"speed": self._speed}
-        
+
         if self._emotions:
             controls["emotion"] = [f"{name}:{level}" for name, level in self._emotions.items()]
-            
+
         return controls
 
     def speak(self, text: str, output_file: str = None):
         if not self.current_model or not (self.current_voice or self.current_mix):
             raise ValueError("Please set a model and a voice or voice mix before speaking.")
+        if not self.client:
+            logger.error("Cannot generate speech without API client.")
+            raise ValueError("API client is not initialized. Cannot generate speech.")
 
         voice_embedding = self.current_voice['embedding'] if self.current_voice else self.current_mix
 
@@ -299,7 +347,7 @@ class CartesiaVoiceManager:
         }
 
         voice_controls = self._get_voice_controls()
-        
+
         logger.info(f"Generating audio for text: {text[:50]}... with voice controls: {voice_controls}")
         if self.current_language == 'en':
             audio_data = self.client.tts.bytes(
@@ -313,13 +361,14 @@ class CartesiaVoiceManager:
             )
         else:
             audio_data = self.client.tts.bytes(
-            model_id='sonic-multilingual',
-            transcript=improved_text,
-            voice_embedding=voice_embedding,
-            duration=None,
-            output_format=output_format,
-            language=self.current_language,
-            _experimental_voice_controls=voice_controls)
+                model_id='sonic-multilingual',
+                transcript=improved_text,
+                voice_embedding=voice_embedding,
+                duration=None,
+                output_format=output_format,
+                language=self.current_language,
+                _experimental_voice_controls=voice_controls
+            )
 
         if output_file is None:
             output_file = f"output_{self.current_language}.wav"
@@ -333,16 +382,19 @@ class CartesiaVoiceManager:
 
     def _get_embedding(self, source: Union[str, Dict]) -> Dict:
         """
-        Получает эмбеддинг из различных источников: ID, путь к файлу или существующий эмбеддинг
+        Gets embedding from various sources: ID, file path, or existing embedding
         """
         if isinstance(source, dict) and 'embedding' in source:
             return source['embedding']
         elif isinstance(source, str):
             if os.path.isfile(source):
-                # Если это путь к файлу, создаем новый эмбеддинг
+                # If it's a file path, create a new embedding
+                if not self.client:
+                    logger.error("Cannot clone voice without API client.")
+                    raise ValueError("API client is not initialized. Cannot clone voice.")
                 return self.client.voices.clone(filepath=source)
             else:
-                # Если это ID, загружаем голос и возвращаем его эмбеддинг
+                # If it's an ID, load the voice and return its embedding
                 voice = self.load_voice(source)
                 return voice['embedding']
         else:
@@ -350,11 +402,15 @@ class CartesiaVoiceManager:
 
     def create_mixed_embedding(self, components: List[Dict[str, Union[str, float, Dict]]]) -> Dict:
         """
-        Создает смешанный эмбеддинг из нескольких компонентов
-        
-        :param components: Список словарей, каждый содержит 'id' (или 'path', или эмбеддинг) и 'weight'
-        :return: Новый смешанный эмбеддинг
+        Creates a mixed embedding from multiple components
+
+        :param components: List of dictionaries, each containing 'id' (or 'path', or embedding) and 'weight'
+        :return: New mixed embedding
         """
+        if not self.client:
+            logger.error("Cannot create mixed embedding without API client.")
+            raise ValueError("API client is not initialized. Cannot create mixed embedding.")
+
         mix_components = []
         for component in components:
             embedding = self._get_embedding(component.get('id') or component.get('path') or component)
@@ -362,32 +418,35 @@ class CartesiaVoiceManager:
                 "embedding": embedding,
                 "weight": component['weight']
             })
-        
+
         return self.client.voices.mix(mix_components)
 
     def create_custom_voice(self, name: str, source: Union[str, List[Dict]], description: str = "", language: str = "en"):
         """
-        Создает кастомный голос из файла или смеси голосов
-        
-        :param name: Имя нового голоса
-        :param source: Путь к файлу или список компонентов для смешивания
-        :param description: Описание голоса
-        :param language: Язык голоса
-        :return: ID нового голоса
+        Creates a custom voice from a file or a mix of voices
+
+        :param name: Name of the new voice
+        :param source: File path or list of components to mix
+        :param description: Description of the voice
+        :param language: Language of the voice
+        :return: ID of the new voice
         """
         logger.info(f"Creating custom voice: {name}")
-        
+
         if isinstance(source, str):
-            # Если источник - строка, считаем это путем к файлу
+            # If source is a string, assume it's a file path
+            if not self.client:
+                logger.error("Cannot clone voice without API client.")
+                raise ValueError("API client is not initialized. Cannot clone voice.")
             embedding = self.client.voices.clone(filepath=source)
         elif isinstance(source, list):
-            # Если источник - список, создаем смешанный эмбеддинг
+            # If source is a list, create a mixed embedding
             embedding = self.create_mixed_embedding(source)
         else:
             raise ValueError("Invalid source type. Expected file path or list of components.")
 
         voice_id = f"custom_{len([f for f in self.custom_dir.glob('*.json')])}"
-        
+
         voice_data = {
             "id": voice_id,
             "name": name,
@@ -397,30 +456,30 @@ class CartesiaVoiceManager:
             "is_public": False,
             "is_custom": True
         }
-        
+
         self._save_voice_to_custom(voice_data)
         self.voices[voice_id] = voice_data
         self.loaded_voices.add(voice_id)
-        
+
         logger.info(f"Created custom voice with id: {voice_id}")
         return voice_id
 
     def get_voice_id_by_name(self, name: str) -> List[str]:
         matching_voices = []
-        
-        # Проверяем оба каталога
+
+        # Check both directories
         for directory in [self.api_dir, self.custom_dir]:
             for file in directory.glob("*.json"):
                 with open(file, "r") as f:
                     voice_data = json.load(f)
                     if voice_data['name'] == name:
                         matching_voices.append(voice_data['id'])
-        
+
         if not matching_voices:
             logger.warning(f"No voices found with name: {name}")
         else:
             logger.info(f"Found {len(matching_voices)} voice(s) with name: {name}")
-        
+
         return matching_voices
 
 def improve_tts_text(text: str, language: str = 'en') -> str:
@@ -430,7 +489,7 @@ def improve_tts_text(text: str, language: str = 'en') -> str:
     def format_date(match):
         date = datetime.strptime(match.group(), '%Y-%m-%d')
         return date.strftime('%m/%d/%Y')
-    
+
     text = re.sub(r'\d{4}-\d{2}-\d{2}', format_date, text)
     text = text.replace(' - ', ' - - ')
     text = re.sub(r'\?(?![\s\n])', '??', text)

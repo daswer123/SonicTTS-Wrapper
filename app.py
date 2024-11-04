@@ -4,75 +4,86 @@ from pathlib import Path
 from sonic_api_wrapper import CartesiaVoiceManager, VoiceAccessibility, improve_tts_text
 import os
 import json
+import datetime
 
-# Инициализация базовых переменных
-DEFAULT_API_KEY = ""
-LANGUAGE_CHOICES = ["all", "ru", "en", "es", "pl", "de", "fr"]
-ACCESS_TYPE_MAP = {
-    "Все": VoiceAccessibility.ALL,
-    "Только кастомные": VoiceAccessibility.ONLY_CUSTOM,
-    "Апи": VoiceAccessibility.ONLY_PUBLIC
-}
-# Обновленные константы
-SPEED_CHOICES = ["Очень медленно", "Медленно", "Нормально", "Быстро", "Очень быстро"]
-EMOTION_CHOICES = ["Нейтрально", "Весело", "Грустно", "Злобно", "Удивленно", "Любопытно"]
-EMOTION_INTENSITY = ["Очень слабая", "Слабая", "Средняя", "Сильная", "Очень сильная"]
-
-# Глобальная переменная для хранения экземпляра менеджера
+# Global variable to hold the manager instance
 manager = None
 
-import datetime
+# Constants
+LANGUAGE_CHOICES = ["all", "ru", "en", "es", "pl", "de", "fr", "tr", "pt", "zh", "ja", "hi", "it", "ko", "nl", "sv"]
+ACCESS_TYPE_MAP = {
+    "All": VoiceAccessibility.ALL,
+    "Custom Only": VoiceAccessibility.ONLY_CUSTOM,
+    "Private Only": VoiceAccessibility.ONLY_PRIVATE,
+    "API": VoiceAccessibility.ONLY_PUBLIC
+}
+SPEED_CHOICES = ["Very Slow", "Slow", "Normal", "Fast", "Very Fast"]
+EMOTION_CHOICES = ["Neutral", "Happy", "Sad", "Angry", "Surprised", "Curious"]
+EMOTION_INTENSITY = ["Very Weak", "Weak", "Medium", "Strong", "Very Strong"]
 
 def map_speed(speed_type: str) -> float:
     speed_map = {
-        "Очень медленно": -1.0,
-        "Медленно": -0.5,
-        "Нормально": 0.0,
-        "Быстро": 0.5,
-        "Очень быстро": 1.0
+        "Very Slow": -1.0,
+        "Slow": -0.5,
+        "Normal": 0.0,
+        "Fast": 0.5,
+        "Very Fast": 1.0
     }
     return speed_map[speed_type]
 
 def generate_output_filename(language: str) -> str:
-    """Генерация имени файла с временной меткой и языком"""
+    """Generate output filename with timestamp and language"""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"output/{timestamp}_{language}.wav"
 
 def extract_voice_id_from_label(voice_label: str) -> str:
     """
-    Извлекает ID голоса из метки в dropdown
-    Например: "John (en) [Custom]" -> извлечет ID из словаря голосов
+    Extracts voice ID from label in dropdown
+    For example: "John (en) [Custom]" -> extract ID from voices dictionary
     """
-    if not manager:
+    global manager
+    try:
+        if not manager:
+            return None
+
+        # Get all voices and their labels
+        choices = manager.get_voice_choices()
+        # Find voice by label and get its ID
+        voice_data = next((c for c in choices if c["label"] == voice_label), None)
+        return voice_data["value"] if voice_data else None
+    except Exception as e:
+        print(f"❌ Error getting voices: {str(e)}")
         return None
-        
-    # Получаем все голоса и их метки
-    choices = manager.get_voice_choices()
-    # Находим голос по метке и берем его ID
-    voice_data = next((c for c in choices if c["label"] == voice_label), None)
-    return voice_data["value"] if voice_data else None
 
 def initialize_manager(api_key: str) -> str:
     global manager
     try:
+        if not api_key:
+            return "❌ API key is required to initialize the manager"
+
         manager = CartesiaVoiceManager(api_key=api_key, base_dir=Path("voice2voice"))
-        return "✅ Менеджер инициализирован"
+        return "✅ Manager initialized"
     except Exception as e:
-        return f"❌ Ошибка: {str(e)}"
+        manager = None
+        return f"❌ Error: {str(e)}"
 
 def get_initial_voices():
-    """Получение начального списка голосов"""
+    global manager
+    """Get initial list of voices"""
     if not manager:
-        initialize_manager(DEFAULT_API_KEY)
+        return [], None
     choices = manager.get_voice_choices()
+    if not choices:
+        return [], None  
     return [c["label"] for c in choices], choices[0]["label"] if choices else None
 
-def update_voice_list (language: str, access_type: str, current_voice: str = None):
+def update_voice_list(language: str, access_type: str, current_voice: str = None):
     """
-    Обновление списка голосов с сохранением текущего выбора
+    Update the list of voices, preserving the current selection
     """
+    global manager
     if not manager:
-        return gr.update(choices=[], value=None), "❌ Менеджер не инициализирован"
+        return gr.update(choices=[], value=None), "❌ Manager is not initialized"
     
     try:
         choices = manager.get_voice_choices(
@@ -80,114 +91,116 @@ def update_voice_list (language: str, access_type: str, current_voice: str = Non
             accessibility=ACCESS_TYPE_MAP[access_type]
         )
         
-        # Преобразуем в список меток
+        # Convert to list of labels
         choice_labels = [c["label"] for c in choices]
         
-        # Определяем значение для выбора
+        # Determine value to select
         if current_voice in choice_labels:
-            # Сохраняем текущий выбор, если он доступен
+            # Preserve current selection if available
             new_value = current_voice
         else:
-            # Иначе берем первый доступный голос
+            # Otherwise, take the first available voice
             new_value = choice_labels[0] if choice_labels else None
             
-        return gr.update(choices=choice_labels, value=new_value), "✅ Список голосов обновлен"
+        return gr.update(choices=choice_labels, value=new_value), "✅ Voice list updated"
     except Exception as e:
-        return gr.update(choices=[], value=None), f"❌ Ошибка: {str(e)}"
+        return gr.update(choices=[], value=None), f"❌ Error: {str(e)}"
 
 def update_voice_info(voice_label: str) -> str:
-    """Обновление информации о голосе"""
+    """Update voice information"""
+    global manager
     if not manager or not voice_label:
         return ""
     
     try:
         voice_id = extract_voice_id_from_label(voice_label)
         if not voice_id:
-            return "❌ Голос не найден"
+            return "❌ Voice not found"
             
         info = manager.get_voice_info(voice_id)
         return (
-            f"Имя: {info['name']}\n"
-            f"Язык: {info['language']}\n"
-            f"Тип: {'Кастомный' if info.get('is_custom') else 'API'}\n"
+            f"Name: {info['name']}\n"
+            f"Language: {info['language']}\n"
+            f"Type: {'Custom' if info.get('is_custom') else 'API'}\n"
             f"ID: {info['id']}"
         )
     except Exception as e:
-        return f"❌ Ошибка: {str(e)}"
+        return f"❌ Error: {str(e)}"
 
 def create_custom_voice(name: str, language: str, audio_data: tuple) -> tuple:
     """
-    Создание кастомного голоса и обновление списка голосов
-    Возвращает: (статус, обновленный dropdown, информация о голосе)
+    Creates a custom voice and updates the list of voices
+    Returns: (status, updated dropdown, voice info)
     """
+    global manager
     if not manager:
-        return "❌ Менеджер не инициализирован", gr.update(), ""
+        return "❌ Manager is not initialized", gr.update(), ""
     
     if not name or not audio_data:
-        return "❌ Необходимо указать имя и файл голоса", gr.update(), ""
+        return "❌ Name and voice file are required", gr.update(), ""
     
     try:
-        # Получаем путь к аудио файлу
+        # Get the audio file path
         audio_path = audio_data[0] if isinstance(audio_data, tuple) else audio_data
         
-        # Создаем голос
-        voice_id = manager.create_custom_embedding(
-            file_path=audio_path,
+        # Create the voice
+        voice_id = manager.create_custom_voice(
             name=name,
+            source=audio_path,
             language=language
         )
         
         print(voice_id)
         
-        # Получаем обновленный список голосов
+        # Get updated list of voices
         choices = manager.get_voice_choices()
         choice_labels = [c["label"] for c in choices]
         
-        # Находим метку для нового голоса
+        # Find label for the new voice
         new_voice_label = next(c["label"] for c in choices if c["value"] == voice_id)
         
-        # Получаем информацию о новом голосе
+        # Get info of the new voice
         voice_info = manager.get_voice_info(voice_id)
         info_text = (
-            f"Имя: {voice_info['name']}\n"
-            f"Язык: {voice_info['language']}\n"
-            f"Тип: Кастомный\n"
+            f"Name: {voice_info['name']}\n"
+            f"Language: {voice_info['language']}\n"
+            f"Type: Custom\n"
             f"ID: {voice_info['id']}"
         )
         
         return (
-            f"✅ Создан кастомный голос: {voice_id}",
+            f"✅ Custom voice created: {voice_id}",
             gr.update(choices=choice_labels, value=new_voice_label),
             info_text
         )
         
     except Exception as e:
-        return f"❌ Ошибка создания голоса: {str(e)}", gr.update(), ""
+        return f"❌ Error creating voice: {str(e)}", gr.update(), ""
 
 def on_auto_language_change(auto_language: bool):
-    """Обработчик изменения галочки автоопределения языка"""
+    """Handler for changing the auto-detect language checkbox"""
     return gr.update(visible=not auto_language)
 
 def map_emotions(selected_emotions, intensity):
     emotion_map = {
-        "Весело": "positivity",
-        "Грустно": "sadness",
-        "Злобно": "anger",
-        "Удивленно": "surprise",
-        "Любопытно": "curiosity"
+        "Happy": "positivity",
+        "Sad": "sadness",
+        "Angry": "anger",
+        "Surprised": "surprise",
+        "Curious": "curiosity"
     }
     
     intensity_map = {
-        "Очень слабая": "lowest",
-        "Слабая": "low",
-        "Средняя": "medium",
-        "Сильная": "high",
-        "Очень сильная": "highest"
+        "Very Weak": "lowest",
+        "Weak": "low",
+        "Medium": "medium",
+        "Strong": "high",
+        "Very Strong": "highest"
     }
     
     emotions = []
     for emotion in selected_emotions:
-        if emotion == "Нейтрально":
+        if emotion == "Neutral":
             continue
         if emotion in emotion_map:
             emotions.append({
@@ -208,180 +221,154 @@ def generate_speech(
     emotions: List[str],
     emotion_intensity: str
 ):
-    """Генерация речи с учетом настроек языка"""
+    global manager
+    """Generate speech considering language settings"""
     if not manager:
-        return None, "❌ Менеджер не инициализирован"
+        return None, "❌ Manager is not initialized"
     
     if not text or not voice_label:
-        return None, "❌ Необходимо указать текст и голос"
+        return None, "❌ Text and voice are required"
     
     try:
-        # Извлекаем ID голоса из метки
+        # Extract voice ID from label
         voice_id = extract_voice_id_from_label(voice_label)
         if not voice_id:
-            return None, "❌ Голос не найден"
+            return None, "❌ Voice not found"
             
-        # Устанавливаем голос по ID
+        # Set the voice by ID
         manager.set_voice(voice_id)
         
-        # Если автоопределение выключено, устанавливаем язык вручную
+        # If auto-detect is off, set language manually
         if not auto_language:
             manager.set_language(manual_language)
         
-        # В функции generate_speech обновите установку скорости:
+        # Set speed
         if use_custom_speed:
             manager.speed = custom_speed
         else:
             manager.speed = map_speed(speed_type)
         
-        # Установка эмоций
-        emotion_map = {
-            "Нейтрально": None,
-            "Весело": "positivity",
-            "Грустно": "sadness",
-            "Злобно": "anger",
-            "Удивленно": "surprise",
-            "Любопытно": "curiosity"
-        }
-        
-        intensity_map = {
-            "Слабая": "low",
-            "Средняя": "medium",
-            "Сильная": "high"
-        }
-        
-        if emotions and emotions != ["Нейтрально"]:
+        # Set emotions
+        if emotions and emotions != ["Neutral"]:
             manager.set_emotions(map_emotions(emotions, emotion_intensity))
         else:
-            manager.set_emotions()  # Сброс эмоций
+            manager.set_emotions()  # Reset emotions
         
-        # Генерация имени файла
+        # Generate output file name
         output_file = generate_output_filename(
             manual_language if not auto_language else manager.current_language
         )
         
-        # Создаем директорию для выходных файлов, если её нет
+        # Create output directory if it doesn't exist
         os.makedirs("output", exist_ok=True)
         
-        # Генерация речи
+        # Generate speech
         output_path = manager.speak(
             text=text if not improve_text else improve_tts_text(text, manager.current_language),
             output_file=output_file
         )
         
-        return output_path, "✅ Аудио сгенерировано успешно"
+        return output_path, "✅ Audio generated successfully"
         
     except Exception as e:
-        return None, f"❌ Ошибка генерации: {str(e)}"
+        return None, f"❌ Error generating speech: {str(e)}"
 
-# Создание интерфейса
+def initialize_manager_and_update(api_key: str, language: str, access_type: str, current_voice: str = None):
+    status = initialize_manager(api_key)
+    if manager:
+        voice_update, voice_status = update_voice_list(language, access_type, current_voice)
+        combined_status = f"{status}\n{voice_status}"
+        return combined_status, voice_update
+    else:
+        return status, gr.update(choices=[], value=None)
+
+# Create the interface
 with gr.Blocks() as demo:
-    # API ключ
+    # API key
     cartesia_api_key = gr.Textbox(
-        label="API ключ Cartesia",
-        value=DEFAULT_API_KEY,
+        label="Cartesia API Key",
+        value="",  # No default API key
         type='password'
     )
     
     with gr.Row():
-        # Левая колонка
+        # Left column
         with gr.Column():
-            cartesia_text = gr.TextArea(label="Текст")
+            cartesia_text = gr.TextArea(label="Text")
             
-            with gr.Accordion(label="Настройки", open=True):
-                # Фильтры
-                with gr.Accordion("Фильтры", open=True):
+            with gr.Accordion(label="Settings", open=True):
+                # Filters
+                with gr.Accordion("Filters", open=True):
                     cartesia_setting_filter_lang = gr.Dropdown(
-                        label="Язык",
+                        label="Language",
                         choices=LANGUAGE_CHOICES,
                         value="all"
                     )
                     cartesia_setting_filter_type = gr.Dropdown(
-                        label="Тип",
-                        choices=ACCESS_TYPE_MAP,
-                        value="Все"
+                        label="Type",
+                        choices=list(ACCESS_TYPE_MAP.keys()),
+                        value="All"
                     )
                 
-                # Вкладки настроек
-                with gr.Tab("Стандарт"):
+                # Settings tabs
+                with gr.Tab("Standard"):
                     cartesia_setting_voice_info = gr.Textbox(
-                        label="Информация о голосе",
+                        label="Voice Information",
                         interactive=False
                     )
                     with gr.Row():
                         initial_choices, initial_value = get_initial_voices()
                         cartesia_setting_voice = gr.Dropdown(
-                            label="Голос",
+                            label="Voice",
                             choices=initial_choices,
                             value=initial_value
                         )
-                    cartesia_setting_voice_update = gr.Button("Обновить")
+                    cartesia_setting_voice_update = gr.Button("Refresh")
                     cartesia_setting_auto_language = gr.Checkbox(
-                         label="Автоматически определять язык из голоса",
+                         label="Automatically detect language from voice",
                          value=True
                      )
                     cartesia_setting_manual_language = gr.Dropdown(
-                         label="Язык озвучки",
+                         label="Speech Language",
                          choices=["ru", "en", "es", "fr", "de", "pl", "it", "ja", "ko", "zh", "hi"],
                          value="en",
-                         visible=False  # Изначально скрыт
+                         visible=False  # Initially hidden
                      )
                 
-                with gr.Tab("Кастомный"):
-                    cartesia_setting_custom_name = gr.Textbox(label="Имя")
+                with gr.Tab("Custom"):
+                    cartesia_setting_custom_name = gr.Textbox(label="Name")
                     cartesia_setting_custom_lang = gr.Dropdown(
-                        label="Язык",
-                        choices=LANGUAGE_CHOICES[1:]  # Исключаем "all"
+                        label="Language",
+                        choices=LANGUAGE_CHOICES[1:]  # Exclude "all"
                     )
-                    cartesia_setting_custom_voice = gr.Audio(label="Файл голоса",type='filepath')
-                    cartesia_setting_custom_add = gr.Button("Добавить")
-                
-                # with gr.Tab("Микс"):
-                #     cartesia_setting_custom_mix = gr.Dropdown(
-                #         label="Выберите голоса",
-                #         multiselect=True,
-                #         choices=[]
-                #     )
-                #     cartesia_setting_custom_mix_update = gr.Button("Обновить")
-                #     for i in range(5):
-                #         setattr(
-                #             demo,
-                #             f'mix_voice_{i+1}',
-                #             gr.Slider(
-                #                 label=f"Голос {i+1}",
-                #                 value=0.5,
-                #                 minimum=0,
-                #                 maximum=1,
-                #                 step=0.01,
-                #                 visible=False
-                #             )
-                #         )
+                    cartesia_setting_custom_voice = gr.Audio(label="Voice File", type='filepath')
+                    cartesia_setting_custom_add = gr.Button("Add")
             
-            # Контроль эмоций
-            with gr.Accordion(label="Контроль эмоций (Beta)", open=False):
+            # Emotion control
+            with gr.Accordion(label="Emotion Control (Beta)", open=False):
                 cartesia_emotions = gr.Dropdown(
-                    label="Эмоции",
+                    label="Emotions",
                     multiselect=True,
                     choices=EMOTION_CHOICES
                 )
                 cartesia_emotions_intensity = gr.Dropdown(
-                    label="Интенсивность",
+                    label="Intensity",
                     choices=EMOTION_INTENSITY,
-                    value="Средняя"
+                    value="Medium"
                 )
             
-            # Настройки скорости
-            with gr.Accordion("Скорость", open=True):
+            # Speed settings
+            with gr.Accordion("Speed", open=True):
                 cartesia_speed_speed = gr.Dropdown(
-                    label="Скорость речи",
+                    label="Speech Speed",
                     choices=SPEED_CHOICES,
-                    value="Нормально"
+                    value="Normal"
                 )
                 cartesia_speed_speed_allow_custom = gr.Checkbox(
-                    label="Использовать кастомное значение скорости"
+                    label="Use custom speed value"
                 )
                 cartesia_speed_speed_custom = gr.Slider(
-                    label="Скорость",
+                    label="Speed",
                     value=0,
                     minimum=-1,
                     maximum=1,
@@ -390,24 +377,24 @@ with gr.Blocks() as demo:
                 )
             
             cartesia_setting_improve_text = gr.Checkbox(
-                label="Улучшить текст согласно рекомендациям",
+                label="Improve text according to recommendations",
                 value=True
             )
         
-        # Правая колонка
+        # Right column
         with gr.Column():
-            cartessia_status_bar = gr.Label(value="Статус")
+            cartessia_status_bar = gr.Label(value="Status")
             cartesia_output_audio = gr.Audio(
-                label="Результат",
+                label="Result",
                 interactive=False
             )
-            cartesia_output_button = gr.Button("Генерация")
-    
-    # События
+            cartesia_output_button = gr.Button("Generate")
+
+    # Events
     cartesia_api_key.change(
-        initialize_manager,
-        inputs=[cartesia_api_key],
-        outputs=[cartessia_status_bar]
+        initialize_manager_and_update,
+        inputs=[cartesia_api_key, cartesia_setting_filter_lang, cartesia_setting_filter_type, cartesia_setting_voice],
+        outputs=[cartessia_status_bar, cartesia_setting_voice]
     )
     
     cartesia_setting_filter_lang.change(
@@ -415,7 +402,7 @@ with gr.Blocks() as demo:
         inputs=[
             cartesia_setting_filter_lang,
             cartesia_setting_filter_type,
-            cartesia_setting_voice  # Передаем текущий выбор
+            cartesia_setting_voice  # Pass the current selection
         ],
         outputs=[cartesia_setting_voice, cartessia_status_bar]
     )
@@ -425,7 +412,7 @@ with gr.Blocks() as demo:
         inputs=[
             cartesia_setting_filter_lang,
             cartesia_setting_filter_type,
-            cartesia_setting_voice  # Передаем текущий выбор
+            cartesia_setting_voice  # Pass the current selection
         ],
         outputs=[cartesia_setting_voice, cartessia_status_bar]
     )
@@ -438,8 +425,8 @@ with gr.Blocks() as demo:
     
     cartesia_setting_voice_update.click(
         update_voice_list,
-        inputs=[cartesia_setting_filter_lang, cartesia_setting_filter_type],
-        outputs=[cartesia_setting_voice]
+        inputs=[cartesia_setting_filter_lang, cartesia_setting_filter_type, cartesia_setting_voice],
+        outputs=[cartesia_setting_voice, cartessia_status_bar]
     )
     
     cartesia_speed_speed_allow_custom.change(
@@ -457,12 +444,11 @@ with gr.Blocks() as demo:
         ],
         outputs=[
             cartessia_status_bar,
-            cartesia_setting_voice,  # Обновляем dropdown
-            cartesia_setting_voice_info  # Обновляем информацию о голосе
+            cartesia_setting_voice,  # Update dropdown
+            cartesia_setting_voice_info  # Update voice info
         ]
     )
     
-    # Обновляем привязки событий
     cartesia_setting_auto_language.change(
         on_auto_language_change,
         inputs=[cartesia_setting_auto_language],
@@ -489,9 +475,7 @@ with gr.Blocks() as demo:
         ]
     )
 
-# Запуск приложения
+# Run the app
 if __name__ == "__main__":
-    # Инициализация менеджера при запуске
-    initialize_manager(DEFAULT_API_KEY)
-    # Запуск интерфейса
-    demo.launch()
+    demo.queue()
+    demo.launch(share=True)
