@@ -3,8 +3,8 @@
 A wrapper around the official Cartesia API for more convenient work with text-to-speech functionality. It also includes a Gradio interface for easy interaction (currently in Russian).
 
 ## TODO
-- [ ] Package and publish to PyPI
-- [ ] Translate Gradio interface to English
+- [x] Package and publish to PyPI
+- [x] Translate Gradio interface to English
 - [ ] Implement voice mixing functionality in Gradio interface
 
 ## Features
