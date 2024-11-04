@@ -216,41 +216,68 @@ class CartesiaVoiceManager:
 
     def list_available_voices(self, languages: List[str] = None, accessibility: VoiceAccessibility = VoiceAccessibility.ALL) -> List[Dict]:
         filtered_voices = []
-
-        # Get only metadata from API (without embeddings)
-        if accessibility in [VoiceAccessibility.ALL, VoiceAccessibility.ONLY_PUBLIC]:
-            if self.client:
-                try:
-                    api_voices = self.client.voices.list()
-                    # Keep only metadata
-                    for voice in api_voices:
-                        metadata = {
-                            'id': voice['id'],
-                            'name': voice['name'],
-                            'language': voice['language'],
-                            'is_public': True
-                        }
+    
+        # Get voices from API
+        if self.client and accessibility in [VoiceAccessibility.ALL, VoiceAccessibility.ONLY_PUBLIC]:
+            try:
+                api_voices = self.client.voices.list()
+                for voice in api_voices:
+                    metadata = {
+                        'id': voice['id'],
+                        'name': voice['name'],
+                        'language': voice['language'],
+                        'is_public': voice['is_public'],
+                        'is_custom': False
+                    }
+                    
+                    # Filter based on accessibility
+                    if accessibility == VoiceAccessibility.ONLY_PUBLIC:
+                        # Only include public voices (not private and not custom)
+                        if metadata['is_public'] and not metadata.get('is_custom'):
+                            if languages is None or metadata['language'] in languages:
+                                filtered_voices.append(metadata)
+                    else:  # ALL
                         if languages is None or metadata['language'] in languages:
                             filtered_voices.append(metadata)
-                except Exception as e:
-                    logger.error(f"Failed to fetch voices from API: {e}")
-            else:
-                logger.warning("API client is not available. Skipping public voices.")
-
-        # Add custom voices if needed
-        if accessibility in [VoiceAccessibility.ALL, VoiceAccessibility.ONLY_PRIVATE, VoiceAccessibility.ONLY_CUSTOM]:
+                            
+            except Exception as e:
+                logger.error(f"Failed to fetch voices from API: {e}")
+        else:
+            logger.warning("API client is not available. Skipping API voices.")
+    
+        # Add custom voices
+        if accessibility in [VoiceAccessibility.ALL, VoiceAccessibility.ONLY_CUSTOM]:
             for file in self.custom_dir.glob("*.json"):
                 with open(file, "r") as f:
                     voice_data = json.load(f)
                     if languages is None or voice_data['language'] in languages:
-                        filtered_voices.append({
+                        metadata = {
                             'id': voice_data['id'],
                             'name': voice_data['name'],
                             'language': voice_data['language'],
                             'is_public': False,
                             'is_custom': True
-                        })
-
+                        }
+                        filtered_voices.append(metadata)
+    
+        # Add private voices (non-public API voices)
+        if accessibility in [VoiceAccessibility.ALL, VoiceAccessibility.ONLY_PRIVATE] and self.client:
+            try:
+                api_voices = self.client.voices.list()
+                for voice in api_voices:
+                    if not voice['is_public'] and not voice.get('is_custom'):
+                        metadata = {
+                            'id': voice['id'],
+                            'name': voice['name'],
+                            'language': voice['language'],
+                            'is_public': False,
+                            'is_custom': False
+                        }
+                        if languages is None or metadata['language'] in languages:
+                            filtered_voices.append(metadata)
+            except Exception as e:
+                logger.error(f"Failed to fetch private voices from API: {e}")
+    
         logger.info(f"Found {len(filtered_voices)} voices matching criteria")
         return filtered_voices
 

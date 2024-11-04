@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sonic-wrapper"
-version = "0.1.1"
+version = "0.1.2"
 authors = [
   { name = "daswer123", email = "daswerq123@gmail.com" }
 ]
