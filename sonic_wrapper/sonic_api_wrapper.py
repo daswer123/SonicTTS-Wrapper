@@ -29,7 +29,7 @@ class CartesiaVoiceManager:
         "fastest": 1.0
     }
     EMOTION_NAMES = ["anger", "positivity", "surprise", "sadness", "curiosity"]
-    EMOTION_LEVELS = ["lowest", "low", "medium", "high", "highest"]
+    EMOTION_LEVELS = ["lowest", "low", "omit", "high", "highest"]
 
     def __init__(self, api_key: str = None, base_dir: Path = None):
         # Load environment variables from .env file
